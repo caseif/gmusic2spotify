@@ -167,7 +167,11 @@ def parse_library_to_json(user, passphrase, json_output):
         'playlists': playlistList,
     }
 
+    print("Writing JSON to disk...")
+
     json.dump(serial, json_output, indent=4)
+
+    print("Done!")
 
 if __name__ == "__main__":
     print("Google username: ", end='')
