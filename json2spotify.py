@@ -3,7 +3,10 @@
 from getpass import getpass
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 from multiprocessing import Process
+import os
 from os import fdopen, pipe
+from select import select
+import signal
 import subprocess
 import sys
 from threading import Thread
@@ -29,16 +32,27 @@ class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
         out_file.write('http://localhost:8000')
         out_file.write(self.path)
         out_file.write('\n')
+        out_file.close()
         exit(0)
 
+    def log_message(self, format, *args):
+        return
+
 def start_http_server(uri_pipe_write_fd):
+    # trash stdout so we don't spam the console with HTTP logs
+    sys.stdout = open('trash', 'w')
+
     httpd = CustomHTTPServer(uri_pipe_write_fd, ('localhost', 8000), CustomHTTPRequestHandler)
-    print("Started HTTP server on port %d." % httpd.socket.getsockname()[1])
     httpd.serve_forever()
 
 def start_user_token_proc(uri_in, token_out, username, scope, client_id, client_secret, redirect_uri):
     # set stdin for the process to the uri pipe so we can read it directly from the HTTP thread
     sys.stdin = fdopen(uri_in, 'r')
+
+    signal.signal(signal.SIGTERM, sys.stdin.close)
+
+    # trash stdout since prompt_for_user_token is pretty spammy
+    sys.stdout = open('trash', 'w')
 
     # call the spotipy function for obtaining the token
     # the function will read from the URI pipe we assigned to stdin, so it won't block
@@ -54,6 +68,8 @@ def start_user_token_proc(uri_in, token_out, username, scope, client_id, client_
     # write a newline to signify end of transmission
     token_out_file.write('\n')
 
+    token_out_file.close()
+
     # the process has now outlived its purpose
     exit(0)
 
@@ -65,24 +81,37 @@ def authenticate(username, client_id, client_secret, scope):
     token_pipe_read_fd, token_pipe_write_fd = pipe()
 
     # start an HTTP server for intercepting the redirect by Spotify
-    http_thread = Thread(target=start_http_server, args=(uri_pipe_write_fd,))
-    http_thread.start()
+    http_proc = Process(target=start_http_server, args=(uri_pipe_write_fd,))
+    http_proc.daemon = True
+    http_proc.start()
 
     # start the token prompt in a new process so we can set the stdin
     token_proc = Process(target=start_user_token_proc, args=(uri_pipe_read_fd, token_pipe_write_fd, username, scope, client_id, client_secret, 'http://localhost:8000'))
+    token_proc.daemon = True
     token_proc.start()
 
     # open the token pipe end and read the token from it
     token_pipe_read = fdopen(token_pipe_read_fd, 'r')
 
     # read the token from the pipe (written by token_proc)
-    token = token_pipe_read.readline()
-
-    if not token:
-        print("Failed to get Spotify token!")
+    r, w, e = select([token_pipe_read], [], [], 5)
+    if not token_pipe_read in r:
+        print("Failed to get Spotify token! (timeout)")
         exit(-1)
 
+    token = token_pipe_read.readline()
+
+    token_pipe_read.close()
+
+    if not token:
+        print("Failed to get Spotify token! (empty)")
+        exit(-1)
+
+    http_proc.terminate()
+    token_proc.terminate()
+
     print("Successfully got Spotify token. (scope: %s)" % scope)
+    print("token: %s" % token)
 
 def import_library_from_json(username, client_id, client_secret, json_input):
     authenticate(username, client_id, client_secret, 'user-library-modify')
