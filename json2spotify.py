@@ -1,18 +1,39 @@
 #!/usr/bin/python3
 
+from datetime import datetime, time, timedelta
 from getpass import getpass
 from http.server import SimpleHTTPRequestHandler, HTTPServer
+import json
 from multiprocessing import Process
 import os
 from os import fdopen, pipe
+import re
 from select import select
 import signal
 import subprocess
 import sys
 from threading import Thread
+from uuid import UUID
 
 import spotipy
 from spotipy.util import prompt_for_user_token
+
+class Song:
+    def __init__(self, artist, title, album):
+        self.artist = artist
+        self.title = title
+        self.album = album
+    
+    def __repr__(self):
+        return "<Song artist:\"%s\" title:\"%s\" album:\"%s\">" % (self.artist, self.title, self.album)
+
+class Playlist:
+    def __init__(self, name):
+        self.name = name
+        self.songs = []
+    
+    def add_song(self, song):
+        self.songs.append(song)
 
 class CustomHTTPServer(HTTPServer):
     def __init__(self, uri_pipe_write_fd, *args, **kw):
@@ -99,7 +120,8 @@ def authenticate(username, client_id, client_secret, scope):
         print("Failed to get Spotify token! (timeout)")
         exit(-1)
 
-    token = token_pipe_read.readline()
+    # read the token from token_prompt, making sure to omit the newline from the end
+    token = token_pipe_read.readline()[:-1]
 
     token_pipe_read.close()
 
@@ -110,11 +132,157 @@ def authenticate(username, client_id, client_secret, scope):
     http_proc.terminate()
     token_proc.terminate()
 
-    print("Successfully got Spotify token. (scope: %s)" % scope)
-    print("token: %s" % token)
+    print("Successfully acquired Spotify token. (scope: %s)" % scope)
+
+    return token
+
+def progress_bar(value, endvalue, eta=-1, bar_length=20):
+    percent = float(value) / endvalue
+    eta_str = (datetime.min + timedelta(seconds=eta)).time().strftime('%H:%M:%S') if eta != -1 else '???'
+    arrow = '-' * int(round(percent * bar_length)-1) + '>'
+    spaces = ' ' * (bar_length - len(arrow))
+
+    sys.stdout.write("\r(%d/%d) [%s] %s%% (ETA: %s)" % (value, endvalue, arrow + spaces, int(round(percent * 100)), eta_str))
+    sys.stdout.flush()
+
+def shift(l, v):
+    l.pop()
+    l.append(v)
+
+def sanitize_field(v):
+    return v.replace('\'', '')
+
+COMMA_REGEX = re.compile(', (.*)')
+AMP_REGEX = re.compile(' & (.*)')
+X_REGEX = re.compile(' x (.*)')
+VS_REGEX = re.compile(' vs\.? (.*)')
+
+def sanitize_artist(v):
+    return sanitize_field(re.sub(VS_REGEX, '', re.sub(X_REGEX, '', re.sub(AMP_REGEX, '', re.sub(COMMA_REGEX, '', v)))))
+
+FT_REGEX = re.compile(' \(ft\. (?:.*)\)')
+FEAT_REGEX = re.compile(' \(feat\. (?:.*)\)')
+
+def sanitize_title(v):
+    return sanitize_field(re.sub(FT_REGEX, '', re.sub(FEAT_REGEX, '', v)))
 
 def import_library_from_json(username, client_id, client_secret, json_input):
-    authenticate(username, client_id, client_secret, 'user-library-modify')
+    library_mod_token = authenticate(username, client_id, client_secret, 'user-library-read')
+
+    print("Creating Spotify API instance...")
+
+    spotify = spotipy.Spotify(auth=library_mod_token)
+
+    print("Loading library JSON...")
+
+    library_json = json.load(json_input)
+
+    song_list = library_json['songs']
+
+    songs = {}
+
+    print("Ingesting song list...")
+
+    for uuid, serial in song_list.items():
+        songs[UUID(uuid)] = Song(serial['artist'], serial['title'], serial['album'])
+
+    print("Successfully imported %d songs." % len(songs))
+
+    print("Ingesting playlist list...")
+
+    playlist_list = library_json['playlists']
+
+    playlists = []
+
+    for serial in playlist_list:
+        playlist = Playlist(serial['name'])
+        playlists.append(playlist)
+        for song in serial['songs']:
+            playlist.add_song(songs[UUID(song)])
+
+    print("Successfully imported %d playlists." % len(playlists))
+
+    spotify_ids = {}
+
+    found = 0
+    failed = 0
+
+    failed_songs = []
+
+    print("Matching songs on Spotify...")
+
+    MAX_SPEEDS = 30
+
+    speeds = []
+    last_search = None
+    last_speed_update = None
+    i = 0
+
+    eta = 0
+    for local_id, song in songs.items():
+        #break
+
+        i += 1
+
+        if last_search != None:
+            cur_speed = 1 / (datetime.now() - last_search).total_seconds()
+
+            if len(speeds) < MAX_SPEEDS:
+                speeds.append(cur_speed)
+            else:
+                shift(speeds, cur_speed)
+
+            avg_speed = sum(speeds) / len(speeds)
+
+            if last_speed_update == None or (datetime.now() - last_speed_update).total_seconds() >= 1:
+                eta = int(float(len(songs) - i) / avg_speed) if avg_speed > 0 else -1
+                last_speed_update = datetime.now()
+            
+        last_search = datetime.now()
+
+        progress_bar(i, len(songs), eta)
+
+        artist = sanitize_artist(song.artist)
+        title = sanitize_title(song.title)
+
+        result = spotify.search('artist:%s track:%s' % (artist, title), type='track')
+
+        track = None
+
+        if result['tracks']['total'] > 0:
+            track = result['tracks']['items'][0]
+        else:
+            result = spotify.search('track:%s' % title, type='track')
+            if result['tracks']['total'] > 0:
+                for item in result['tracks']['items']:
+                    for artist in item['artists']:
+                        if artist['name'] == artist:
+                            track = item
+                            break
+                    if track != None:
+                        break
+
+            if track == None:
+                failed += 1
+                failed_songs.append(song)
+                continue
+
+        spotify_ids[local_id] = track['id']
+
+        found += 1
+
+    print()
+    
+    print("Found %d tracks on Spotify." % found)
+    print("Failed to find %d tracks." % failed)
+
+    if failed > 0:
+        with open('failed.csv', 'w') as failed_file:
+            failed_file.write('artist,title,album\n')
+            for song in failed_songs:
+                failed_file.write("%s,%s,%s\n" % (song.artist, song.title, song.album))
+
+        print("Wrote failed songs to failed.csv.")
 
 if __name__ == '__main__':
     print("Spotify username: ", end='')
