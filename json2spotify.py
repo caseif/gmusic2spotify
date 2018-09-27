@@ -231,7 +231,7 @@ def import_library_from_json(username, client_id, client_secret, json_input):
 
     spotify_songs = [x for x in OrderedDict.fromkeys(list(spotify_ids.values())) if x.in_library]
 
-    print("Adding matched %d songs to Spotify library..." % len(spotify_songs))
+    print("Adding %d matched songs to Spotify library..." % len(spotify_songs))
 
     PER_REQUEST = 50
 
