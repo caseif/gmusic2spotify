@@ -1,5 +1,7 @@
 #!/usr/bin/python3
 
+from getpass import getpass
+
 import spotipy
 
 from spotify_auth import authenticate

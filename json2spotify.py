@@ -3,6 +3,7 @@
 from datetime import datetime, time, timedelta
 from getpass import getpass
 import json
+from math import ceil
 import re
 from sys import stdout
 from uuid import UUID
@@ -228,7 +229,16 @@ def import_library_from_json(username, client_id, client_secret, json_input):
 
     print("Adding matched songs to Spotify library...")
 
-    #spotify.current_user_saved_tracks_add()
+    spotify_songs = list(spotify_ids.values())
+
+    PER_REQUEST = 50
+
+    for i in range(0, ceil(len(spotify_songs) / PER_REQUEST)):
+        slice = spotify_songs[(i * PER_REQUEST):((i + 1) * PER_REQUEST)]
+
+        spotify.current_user_saved_tracks_add(slice)
+
+    print("Finished adding songs to library.")
 
 if __name__ == '__main__':
     user = input('Spotify username: ')
