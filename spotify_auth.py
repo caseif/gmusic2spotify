@@ -3,7 +3,7 @@ from multiprocessing import Process
 from os import devnull, fdopen, pipe
 from select import select
 import signal
-from sys import stdin, stdout
+import sys
 
 from spotipy.util import prompt_for_user_token
 
@@ -33,19 +33,19 @@ class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
 
 def start_http_server(uri_pipe_write_fd):
     # trash stdout so we don't spam the console with HTTP logs
-    stdout = open(devnull, 'w')
+    sys.stdout = open(devnull, 'w')
 
     httpd = CustomHTTPServer(uri_pipe_write_fd, ('localhost', 8000), CustomHTTPRequestHandler)
     httpd.serve_forever()
 
 def start_user_token_proc(uri_in, token_out, username, scope, client_id, client_secret, redirect_uri):
     # set stdin for the process to the uri pipe so we can read it directly from the HTTP thread
-    stdin = fdopen(uri_in, 'r')
+    sys.stdin = fdopen(uri_in, 'r')
 
-    signal.signal(signal.SIGTERM, stdin.close)
+    signal.signal(signal.SIGTERM, sys.stdin.close)
 
     # trash stdout since prompt_for_user_token is pretty spammy
-    stdout = open(devnull, 'w')
+    sys.stdout = open(devnull, 'w')
 
     # call the spotipy function for obtaining the token
     # the function will read from the URI pipe we assigned to stdin, so it won't block
