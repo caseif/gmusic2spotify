@@ -139,19 +139,29 @@ def authenticate(username, client_id, client_secret, scope):
 def progress_bar(value, endvalue, eta=-1, bar_length=20):
     percent = float(value) / endvalue
     eta_str = (datetime.min + timedelta(seconds=eta)).time().strftime('%H:%M:%S') if eta != -1 else '???'
-    arrow = '-' * int(round(percent * bar_length)-1) + '>'
-    spaces = ' ' * (bar_length - len(arrow))
+    filled = '\u2588' * int(round(percent * bar_length))
+    empty = '\u2591' * (bar_length - len(filled))
 
-    sys.stdout.write("\r(%d/%d) [%s] %s%% (ETA: %s)" % (value, endvalue, arrow + spaces, int(round(percent * 100)), eta_str))
+    sys.stdout.write("\r(%d/%d) %s %s%% (ETA: %s)" % (value, endvalue, filled + empty, int(round(percent * 100)), eta_str))
     sys.stdout.flush()
 
 def shift(l, v):
     l.pop()
     l.append(v)
 
-def sanitize_field(v):
-    return v.replace('\'', '')
+# apostrophes should be removed entirely (instead of replaced by spaces)
+APOS_REGEX = re.compile('\'')
+# most non-alphanumeric characters cause problems, and they don't provide any disambiguation
+NON_AN_REGEX = re.compile('[^A-Za-zÀ-ÿ0-9-_ ]')
+# a mismatch in the leading "the" in track/artist names is a common point of failure
+THE_REGEX = re.compile('^The ')
 
+def sanitize_field(v):
+    return re.sub(THE_REGEX, '', re.sub(NON_AN_REGEX, ' ', re.sub(APOS_REGEX, '', v)))
+
+# all of the following regexes are usually used to separate multiple artists
+# it's usually "good enough" to only search for the first artist -
+#     it usually only fails when a featured artist or remixer isn't properly credited as an artist
 COMMA_REGEX = re.compile(', (.*)')
 AMP_REGEX = re.compile(' & (.*)')
 X_REGEX = re.compile(' x (.*)')
@@ -160,14 +170,14 @@ VS_REGEX = re.compile(' vs\.? (.*)')
 def sanitize_artist(v):
     return sanitize_field(re.sub(VS_REGEX, '', re.sub(X_REGEX, '', re.sub(AMP_REGEX, '', re.sub(COMMA_REGEX, '', v)))))
 
-FT_REGEX = re.compile(' \(ft\. (?:.*)\)')
-FEAT_REGEX = re.compile(' \(feat\. (?:.*)\)')
+# a mismatch in whether the featured artist is credited in the track name is a common point of failure
+FEAT_REGEX = re.compile(' [\(\[]f(ea)?t\.? (.*)[\)\]]')
 
 def sanitize_title(v):
-    return sanitize_field(re.sub(FT_REGEX, '', re.sub(FEAT_REGEX, '', v)))
+    return sanitize_field(re.sub(FEAT_REGEX, '', v))
 
 def import_library_from_json(username, client_id, client_secret, json_input):
-    library_mod_token = authenticate(username, client_id, client_secret, 'user-library-read')
+    library_mod_token = authenticate(username, client_id, client_secret, 'user-library-modify')
 
     print("Creating Spotify API instance...")
 
@@ -242,30 +252,43 @@ def import_library_from_json(username, client_id, client_secret, json_input):
 
         progress_bar(i, len(songs), eta)
 
-        artist = sanitize_artist(song.artist)
-        title = sanitize_title(song.title)
+        artist = song.artist
+        title = song.title
 
         result = spotify.search('artist:%s track:%s' % (artist, title), type='track')
 
         track = None
 
         if result['tracks']['total'] > 0:
+            # no additional heuristics needed
             track = result['tracks']['items'][0]
         else:
-            result = spotify.search('track:%s' % title, type='track')
-            if result['tracks']['total'] > 0:
-                for item in result['tracks']['items']:
-                    for artist in item['artists']:
-                        if artist['name'] == artist:
-                            track = item
-                            break
-                    if track != None:
-                        break
+            # we'll try transforming the artist and title (this is really slow so we avoid doing it by default)
+            artist = sanitize_artist(artist)
+            title = sanitize_title(title)
 
-            if track == None:
-                failed += 1
-                failed_songs.append(song)
-                continue
+            result = spotify.search('artist:%s track:%s' % (artist, title), type='track')
+            
+            if result['tracks']['total'] > 0:
+                # no additional heuristics needed
+                track = result['tracks']['items'][0]
+            else:
+                # we're really having trouble - let's search by song title only, then match the artist after the fact
+                result = spotify.search('track:%s' % title, type='track')
+                if result['tracks']['total'] > 0:
+                    for item in result['tracks']['items']:
+                        for listed_artist in item['artists']:
+                            if listed_artist['name'].lower() == artist.lower():
+                                track = item
+                                break
+                        if track != None:
+                            break
+
+                if track == None:
+                    # can't find it, period
+                    failed += 1
+                    failed_songs.append(song)
+                    continue
 
         spotify_ids[local_id] = track['id']
 
@@ -273,6 +296,9 @@ def import_library_from_json(username, client_id, client_secret, json_input):
 
     print()
     
+    #print("query: %s | %s" % (sanitize_artist("Ween"), sanitize_title("I'm In The Mood To Move")))
+    #print(spotify.search("artist:%s track:%s" % (sanitize_artist("Ween"), sanitize_title("I'm In The Mood To Move")), type='track'))
+
     print("Found %d tracks on Spotify." % found)
     print("Failed to find %d tracks." % failed)
 
@@ -283,6 +309,10 @@ def import_library_from_json(username, client_id, client_secret, json_input):
                 failed_file.write("%s,%s,%s\n" % (song.artist, song.title, song.album))
 
         print("Wrote failed songs to failed.csv.")
+
+    print("Adding matched songs to Spotify library...")
+
+    #spotify.current_user_saved_tracks_add()
 
 if __name__ == '__main__':
     print("Spotify username: ", end='')
