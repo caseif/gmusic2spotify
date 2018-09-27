@@ -169,7 +169,7 @@ def parse_library_to_json(user, passphrase, json_output):
 
     print("Writing JSON to disk...")
 
-    json.dump(serial, json_output, indent=4)
+    json.dump(serial, json_output, indent=2)
 
     print("Done!")
 

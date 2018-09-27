@@ -280,7 +280,7 @@ def import_library_from_json(username, client_id, client_secret, json_input):
             # no additional heuristics needed
             track = result['tracks']['items'][0]
         else:
-            # we'll try transforming the artist and title (this is really slow so we avoid doing it by default)
+            # we'll try transforming the artist and title
             artist = sanitize_artist(artist)
             title = sanitize_title(title)
 
@@ -290,8 +290,7 @@ def import_library_from_json(username, client_id, client_secret, json_input):
                 # no additional heuristics needed
                 track = result['tracks']['items'][0]
             else:
-                # we're having trouble - let's search by song title only, then match the artist after the fact
-                # it's faster to do this by default, but usually leads to a bunch of tracks failing to match
+                # search by song title only, then match the artist after the fact
                 result = spotify.search('track:%s' % title, type='track')
                 if result['tracks']['total'] > 0:
                     for item in result['tracks']['items']:
@@ -313,20 +312,26 @@ def import_library_from_json(username, client_id, client_secret, json_input):
         found += 1
 
     print()
-    
-    #print("query: %s | %s" % (sanitize_artist("Ween"), sanitize_title("I'm In The Mood To Move")))
-    #print(spotify.search("artist:%s track:%s" % (sanitize_artist("Ween"), sanitize_title("I'm In The Mood To Move")), type='track'))
 
     print("Found %d tracks on Spotify." % found)
     print("Failed to find %d tracks." % failed)
 
     if failed > 0:
-        with open('failed.csv', 'w') as failed_file:
-            failed_file.write('artist,title,album\n')
-            for song in failed_songs:
-                failed_file.write("%s,%s,%s\n" % (song.artist, song.title, song.album))
+        unmatched_json = {
+            'songs': [
+                {
+                    'artist': song.artist,
+                    'title': song.title,
+                    'album': song.album,
+                    'in_playlists': [pl.name for pl in song.playlists],
+                } for song in failed_songs
+            ]
+        }
 
-        print("Wrote failed songs to failed.csv.")
+        with open('unmatched.json', 'w') as unmatched_file:
+            json.dump(unmatched_json, unmatched_file, indent=2)
+
+        print("Wrote unmatched song info to unmatched.json.")
 
     print("Adding matched songs to Spotify library...")
 
