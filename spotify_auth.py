@@ -107,3 +107,7 @@ def authenticate(username, client_id, client_secret, scope):
     print("Successfully acquired Spotify token. (scope: %s)" % scope)
 
     return token
+
+if __name__ == "__main__":
+    print("This file contains a library and cannot be run from the CLI.")
+    exit(-1)
