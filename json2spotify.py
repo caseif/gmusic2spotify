@@ -231,13 +231,9 @@ def import_library_from_json(username, client_id, client_secret, json_input):
     #spotify.current_user_saved_tracks_add()
 
 if __name__ == '__main__':
-    print("Spotify username: ", end='')
-    user = input()
-
-    print("Spotify client ID: ", end='')
-    client_id = input()
-
-    client_secret = getpass("Spotify client secret: ")
+    user = input('Spotify username: ')
+    client_id = input('Spotify client ID: ')
+    client_secret = getpass('Spotify client secret: ')
 
     with open('output_library.json', 'r') as json_file:
         import_library_from_json(user, client_id, client_secret, json_file)
