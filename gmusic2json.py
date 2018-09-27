@@ -134,7 +134,7 @@ def parse_library_to_json(user, passphrase, json_output):
             traceback.print_exc()
             print("Failed to process playlist with ID %s." % entry['id'])
 
-    print("Added %d entries to %d playlists." % (added, len(local_playlists)))
+    print("Found %d entries in %d playlists." % (added, len(local_playlists)))
     print("Skipped %d entries." % skipped)
 
     print("Serializing library data to JSON...")

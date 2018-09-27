@@ -23,7 +23,11 @@ class Song:
         self.artist = artist
         self.title = title
         self.album = album
+        self.playlists = []
     
+    def add_playlist(self, playlist):
+        self.playlists.append(playlist)
+
     def __repr__(self):
         return "<Song artist:\"%s\" title:\"%s\" album:\"%s\">" % (self.artist, self.title, self.album)
 
@@ -115,7 +119,7 @@ def authenticate(username, client_id, client_secret, scope):
     token_pipe_read = fdopen(token_pipe_read_fd, 'r')
 
     # read the token from the pipe (written by token_proc)
-    r, w, e = select([token_pipe_read], [], [], 5)
+    r, w, e = select([token_pipe_read], [], [], 30)
     if not token_pipe_read in r:
         print("Failed to get Spotify token! (timeout)")
         exit(-1)
@@ -146,7 +150,7 @@ def progress_bar(value, endvalue, eta=-1, bar_length=20):
     sys.stdout.flush()
 
 def shift(l, v):
-    l.pop()
+    l.pop(0)
     l.append(v)
 
 # apostrophes should be removed entirely (instead of replaced by spaces)
@@ -171,7 +175,7 @@ def sanitize_artist(v):
     return sanitize_field(re.sub(VS_REGEX, '', re.sub(X_REGEX, '', re.sub(AMP_REGEX, '', re.sub(COMMA_REGEX, '', v)))))
 
 # a mismatch in whether the featured artist is credited in the track name is a common point of failure
-FEAT_REGEX = re.compile(' [\(\[]f(ea)?t\.? (.*)[\)\]]')
+FEAT_REGEX = re.compile(' [\(\[][Ff](ea)?t\.? (.*)[\)\]]')
 
 def sanitize_title(v):
     return sanitize_field(re.sub(FEAT_REGEX, '', v))
@@ -209,6 +213,7 @@ def import_library_from_json(username, client_id, client_secret, json_input):
         playlists.append(playlist)
         for song in serial['songs']:
             playlist.add_song(songs[UUID(song)])
+            songs[UUID(song)].add_playlist(playlist)
 
     print("Successfully imported %d playlists." % len(playlists))
 
@@ -221,7 +226,7 @@ def import_library_from_json(username, client_id, client_secret, json_input):
 
     print("Matching songs on Spotify...")
 
-    MAX_SPEEDS = 30
+    MAX_SPEEDS = 50
 
     speeds = []
     last_search = None
@@ -255,6 +260,18 @@ def import_library_from_json(username, client_id, client_secret, json_input):
         artist = song.artist
         title = song.title
 
+        # We have three different levels of heuristics which we use to match tracks:
+        #   1) Pass the artist and title as-is, and hope Spotify turns something up.
+        #   2) Transform the artist and title, then pass them on to spotify. This
+        #      resolves issues with minor formatting differences and special characters.
+        #   3) Pass only the transformed title, then manually match the artist against
+        #      the returned results. this is a last-resort, as it is only accurate in
+        #      cases where the first two searches fail.
+        # The reason for executing all heuristics is that each fails in certain cases,
+        # and by executing all three, we ensure that the maximum number of tracks are
+        # matched. Unfortunately, this means sacrificing speed for accuracy, since
+        # Spotify is really slow at returning search results.
+
         result = spotify.search('artist:%s track:%s' % (artist, title), type='track')
 
         track = None
@@ -273,7 +290,8 @@ def import_library_from_json(username, client_id, client_secret, json_input):
                 # no additional heuristics needed
                 track = result['tracks']['items'][0]
             else:
-                # we're really having trouble - let's search by song title only, then match the artist after the fact
+                # we're having trouble - let's search by song title only, then match the artist after the fact
+                # it's faster to do this by default, but usually leads to a bunch of tracks failing to match
                 result = spotify.search('track:%s' % title, type='track')
                 if result['tracks']['total'] > 0:
                     for item in result['tracks']['items']:
