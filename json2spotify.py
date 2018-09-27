@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 
+from collections import OrderedDict
 from datetime import datetime, time, timedelta
 from getpass import getpass
 import json
@@ -14,10 +15,11 @@ from spotipy.util import prompt_for_user_token
 from spotify_auth import authenticate
 
 class Song:
-    def __init__(self, artist, title, album):
+    def __init__(self, artist, title, album, in_library):
         self.artist = artist
         self.title = title
         self.album = album
+        self.in_library = in_library
         self.playlists = []
     
     def add_playlist(self, playlist):
@@ -92,7 +94,7 @@ def import_library_from_json(username, client_id, client_secret, json_input):
     print("Ingesting song list...")
 
     for uuid, serial in song_list.items():
-        songs[UUID(uuid)] = Song(serial['artist'], serial['title'], serial['album'])
+        songs[UUID(uuid)] = Song(serial['artist'], serial['title'], serial['album'], serial['in_library'])
 
     print("Successfully imported %d songs." % len(songs))
 
@@ -196,7 +198,7 @@ def import_library_from_json(username, client_id, client_secret, json_input):
                             break
 
                 if track == None:
-                    # can't find it, period
+                    # can't find it
                     failed += 1
                     failed_songs.append(song)
                     continue
@@ -227,9 +229,9 @@ def import_library_from_json(username, client_id, client_secret, json_input):
 
         print("Wrote unmatched song info to unmatched.json.")
 
-    print("Adding matched songs to Spotify library...")
+    spotify_songs = [x for x in OrderedDict.fromkeys(list(spotify_ids.values())) if x.in_library]
 
-    spotify_songs = list(spotify_ids.values())
+    print("Adding matched %d songs to Spotify library..." % len(spotify_songs))
 
     PER_REQUEST = 50
 

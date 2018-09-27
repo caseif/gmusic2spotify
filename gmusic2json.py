@@ -8,11 +8,12 @@ from uuid import UUID, uuid4
 from gmusicapi.clients import Mobileclient
 
 class Song:
-    def __init__(self, id, artist, title, album):
+    def __init__(self, id, artist, title, album, in_library = True):
         self.id = id
         self.artist = artist
         self.title = title
         self.album = album
+        self.in_library = in_library
     
     def __repr__(self):
         return "<Song artist:\"%s\" title:\"%s\" album:\"%s\">" % (self.artist, self.title, self.album)
@@ -105,7 +106,7 @@ def parse_library_to_json(user, passphrase, json_output):
 
                             store_to_uuid[base_id] = uuid
 
-                            song = Song(uuid, track_info['artist'], track_info['title'], track_info['album'])
+                            song = Song(uuid, track_info['artist'], track_info['title'], track_info['album'], in_library=False)
 
                             local_songs[uuid] = song
 
@@ -147,6 +148,7 @@ def parse_library_to_json(user, passphrase, json_output):
             'artist': song.artist,
             'title': song.title,
             'album': song.album,
+            'in_library': song.in_library,
         }
     
     playlistList = []
