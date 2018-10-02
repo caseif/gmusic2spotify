@@ -1,10 +1,12 @@
 #!/usr/bin/python3
 
 from collections import OrderedDict
+import csv
 from datetime import datetime, time, timedelta
 from getpass import getpass
 import json
 from math import ceil
+from os import path
 import re
 from sys import stdout
 from uuid import UUID
@@ -15,7 +17,8 @@ from spotipy.util import prompt_for_user_token
 from spotify_auth import authenticate
 
 class Song:
-    def __init__(self, artist, title, album, in_library):
+    def __init__(self, id, artist, title, album, in_library):
+        self.id = id
         self.artist = artist
         self.title = title
         self.album = album
@@ -34,7 +37,8 @@ class Playlist:
         self.songs = []
     
     def add_song(self, song):
-        self.songs.append(song)
+        if not song in self.songs:
+            self.songs.append(song)
 
 def progress_bar(value, endvalue, eta=-1, bar_length=20):
     percent = float(value) / endvalue
@@ -48,6 +52,15 @@ def progress_bar(value, endvalue, eta=-1, bar_length=20):
 def shift(l, v):
     l.pop(0)
     l.append(v)
+
+def unique(l):
+    seen = set()
+    ul = []
+    for x in l:
+        if x not in seen:
+            ul.append(x)
+            seen.add(x)
+    return ul
 
 # apostrophes should be removed entirely (instead of replaced by spaces)
 APOS_REGEX = re.compile('\'')
@@ -65,7 +78,7 @@ def sanitize_field(v):
 COMMA_REGEX = re.compile(', (.*)')
 AMP_REGEX = re.compile(' & (.*)')
 X_REGEX = re.compile(' x (.*)')
-VS_REGEX = re.compile(' vs\.? (.*)')
+VS_REGEX = re.compile(' vs\\.? (.*)')
 
 def sanitize_artist(v):
     return sanitize_field(re.sub(VS_REGEX, '', re.sub(X_REGEX, '', re.sub(AMP_REGEX, '', re.sub(COMMA_REGEX, '', v)))))
@@ -77,7 +90,7 @@ def sanitize_title(v):
     return sanitize_field(re.sub(FEAT_REGEX, '', v))
 
 def import_library_from_json(username, client_id, client_secret, json_input):
-    library_mod_token = authenticate(username, client_id, client_secret, 'user-library-modify')
+    library_mod_token = authenticate(username, client_id, client_secret, 'user-library-modify playlist-modify-private')
 
     print("Creating Spotify API instance...")
 
@@ -94,7 +107,7 @@ def import_library_from_json(username, client_id, client_secret, json_input):
     print("Ingesting song list...")
 
     for uuid, serial in song_list.items():
-        songs[UUID(uuid)] = Song(serial['artist'], serial['title'], serial['album'], serial['in_library'])
+        songs[UUID(uuid)] = Song(uuid, serial['artist'], serial['title'], serial['album'], serial['in_library'])
 
     print("Successfully imported %d songs." % len(songs))
 
@@ -120,127 +133,166 @@ def import_library_from_json(username, client_id, client_secret, json_input):
 
     failed_songs = []
 
-    print("Matching songs on Spotify...")
+    MAPPINGS_FILE_NAME = 'spotify_mappings.csv'
 
-    MAX_SPEEDS = 50
+    if path.isfile(MAPPINGS_FILE_NAME):
+        print("Using local mappings file.")
+        with open(MAPPINGS_FILE_NAME, 'r') as mappings_file:
+            reader = csv.reader(mappings_file)
+            for row in reader:
+                spotify_ids[row[0]] = row[1]
+    else:
+        print("Matching songs on Spotify...")
 
-    speeds = []
-    last_search = None
-    last_speed_update = None
-    i = 0
+        MAX_SPEEDS = 50
 
-    eta = 0
-    for local_id, song in songs.items():
-        #break
+        speeds = []
+        last_search = None
+        last_speed_update = None
+        i = 0
 
-        i += 1
+        eta = 0
+        for local_id, song in songs.items():
+            i += 1
 
-        if last_search != None:
-            cur_speed = 1 / (datetime.now() - last_search).total_seconds()
+            if last_search != None:
+                cur_speed = 1 / (datetime.now() - last_search).total_seconds()
 
-            if len(speeds) < MAX_SPEEDS:
-                speeds.append(cur_speed)
-            else:
-                shift(speeds, cur_speed)
+                if len(speeds) < MAX_SPEEDS:
+                    speeds.append(cur_speed)
+                else:
+                    shift(speeds, cur_speed)
 
-            avg_speed = sum(speeds) / len(speeds)
+                avg_speed = sum(speeds) / len(speeds)
 
-            if last_speed_update == None or (datetime.now() - last_speed_update).total_seconds() >= 1:
-                eta = int(float(len(songs) - i) / avg_speed) if avg_speed > 0 else -1
-                last_speed_update = datetime.now()
-            
-        last_search = datetime.now()
+                if last_speed_update == None or (datetime.now() - last_speed_update).total_seconds() >= 1:
+                    eta = int(float(len(songs) - i) / avg_speed) if avg_speed > 0 else -1
+                    last_speed_update = datetime.now()
+                
+            last_search = datetime.now()
 
-        progress_bar(i, len(songs), eta)
+            progress_bar(i, len(songs), eta)
 
-        artist = song.artist
-        title = song.title
+            artist = song.artist
+            title = song.title
 
-        # We have three different levels of heuristics which we use to match tracks:
-        #   1) Pass the artist and title as-is, and hope Spotify turns something up.
-        #   2) Transform the artist and title, then pass them on to spotify. This
-        #      resolves issues with minor formatting differences and special characters.
-        #   3) Pass only the transformed title, then manually match the artist against
-        #      the returned results. this is a last-resort, as it is only accurate in
-        #      cases where the first two searches fail.
-        # The reason for executing all heuristics is that each fails in certain cases,
-        # and by executing all three, we ensure that the maximum number of tracks are
-        # matched. Unfortunately, this means sacrificing speed for accuracy, since
-        # Spotify is really slow at returning search results.
-
-        result = spotify.search('artist:%s track:%s' % (artist, title), type='track')
-
-        track = None
-
-        if result['tracks']['total'] > 0:
-            # no additional heuristics needed
-            track = result['tracks']['items'][0]
-        else:
-            # we'll try transforming the artist and title
-            artist = sanitize_artist(artist)
-            title = sanitize_title(title)
+            # We have three different levels of heuristics which we use to match tracks:
+            #   1) Pass the artist and title as-is, and hope Spotify turns something up.
+            #   2) Transform the artist and title, then pass them on to spotify. This
+            #      resolves issues with minor formatting differences and special characters.
+            #   3) Pass only the transformed title, then manually match the artist against
+            #      the returned results. this is a last-resort, as it is only accurate in
+            #      cases where the first two searches fail.
+            # The reason for executing all heuristics is that each fails in certain cases,
+            # and by executing all three, we ensure that the maximum number of tracks are
+            # matched. Unfortunately, this means sacrificing speed for accuracy, since
+            # Spotify is really slow at returning search results.
 
             result = spotify.search('artist:%s track:%s' % (artist, title), type='track')
-            
+
+            track = None
+
             if result['tracks']['total'] > 0:
                 # no additional heuristics needed
                 track = result['tracks']['items'][0]
             else:
-                # search by song title only, then match the artist after the fact
-                result = spotify.search('track:%s' % title, type='track')
+                # we'll try transforming the artist and title
+                artist = sanitize_artist(artist)
+                title = sanitize_title(title)
+
+                result = spotify.search('artist:%s track:%s' % (artist, title), type='track')
+                
                 if result['tracks']['total'] > 0:
-                    for item in result['tracks']['items']:
-                        for listed_artist in item['artists']:
-                            if listed_artist['name'].lower() == artist.lower():
-                                track = item
+                    # no additional heuristics needed
+                    track = result['tracks']['items'][0]
+                else:
+                    # search by song title only, then match the artist after the fact
+                    result = spotify.search('track:%s' % title, type='track')
+                    if result['tracks']['total'] > 0:
+                        for item in result['tracks']['items']:
+                            for listed_artist in item['artists']:
+                                if listed_artist['name'].lower() == artist.lower():
+                                    track = item
+                                    break
+                            if track != None:
                                 break
-                        if track != None:
-                            break
 
-                if track == None:
-                    # can't find it
-                    failed += 1
-                    failed_songs.append(song)
-                    continue
+                    if track == None:
+                        # can't find it
+                        failed += 1
+                        failed_songs.append(song)
+                        continue
 
-        spotify_ids[local_id] = track['id']
+            spotify_ids[local_id] = track['id']
 
-        found += 1
+            found += 1
 
-    print()
+        print()
 
-    print("Found %d tracks on Spotify." % found)
-    print("Failed to find %d tracks." % failed)
+        print("Found %d tracks on Spotify." % found)
+        print("Failed to find %d tracks." % failed)
 
-    if failed > 0:
-        unmatched_json = {
-            'songs': [
-                {
-                    'artist': song.artist,
-                    'title': song.title,
-                    'album': song.album,
-                    'in_playlists': [pl.name for pl in song.playlists],
-                } for song in failed_songs
-            ]
-        }
+        if failed > 0:
+            unmatched_json = {
+                'songs': [
+                    {
+                        'artist': song.artist,
+                        'title': song.title,
+                        'album': song.album,
+                        'in_playlists': [pl.name for pl in song.playlists],
+                    } for song in failed_songs
+                ]
+            }
 
-        with open('unmatched.json', 'w') as unmatched_file:
-            json.dump(unmatched_json, unmatched_file, indent=2)
+            with open('unmatched.json', 'w') as unmatched_file:
+                json.dump(unmatched_json, unmatched_file, indent=2)
 
-        print("Wrote unmatched song info to unmatched.json.")
+            print("Wrote unmatched song info to unmatched.json.")
 
-    spotify_songs = [x for x in OrderedDict.fromkeys(list(spotify_ids.values())) if x.in_library]
+        with open(MAPPINGS_FILE_NAME, 'w+') as mappings_file:
+            writer = csv.writer(mappings_file)
+
+            for k, v in spotify_ids.items():
+                writer.writerow([k, v])
+            
+            print("Wrote Spotify ID mappings to %s." % MAPPINGS_FILE_NAME)
+
+    spotify_songs = unique({k:v for k, v in spotify_ids.items() if songs[UUID(k)].in_library}.values())
 
     print("Adding %d matched songs to Spotify library..." % len(spotify_songs))
 
     PER_REQUEST = 50
 
     for i in range(0, ceil(len(spotify_songs) / PER_REQUEST)):
-        slice = spotify_songs[(i * PER_REQUEST):((i + 1) * PER_REQUEST)]
+        songs_slice = spotify_songs[(i * PER_REQUEST):min((i + 1) * PER_REQUEST, len(spotify_songs))]
 
-        spotify.current_user_saved_tracks_add(slice)
+        if len(songs_slice) == 0:
+            break
+
+        spotify.current_user_saved_tracks_add(songs_slice)
 
     print("Finished adding songs to library.")
+
+    print("Generating %d playlists..." % len(playlists))
+
+    for playlist in playlists:
+        playlist_id = spotify.user_playlist_create(user, playlist.name, public=False)['id']
+
+        for i in range(0, ceil(len(playlist.songs) / PER_REQUEST)):
+            songs_slice = [
+                spotify_ids[song.id]
+                    for song in playlist.songs[(i * PER_REQUEST):min((i + 1) * PER_REQUEST, len(playlist.songs))]
+                    if song.id in spotify_ids
+            ]
+
+            if len(songs_slice) == 0:
+                break
+
+            spotify.user_playlist_add_tracks(user, playlist_id, songs_slice)
+
+    print("Finished generating playlists.")
+
+    print("Done!")
 
 if __name__ == '__main__':
     user = input('Spotify username: ')
