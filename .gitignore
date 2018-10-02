@@ -1,0 +1,6 @@
+__pycache__/
+.vscode/
+.cache*
+output_library.json
+spotify_mappings.csv
+unmatched.json
