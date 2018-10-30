@@ -333,5 +333,7 @@ if __name__ == '__main__':
     client_id = input('Spotify client ID: ')
     client_secret = getpass('Spotify client secret: ')
 
+    print("secret!!!: <<%s>>" % client_secret)
+
     with open('output_library.json', 'r') as json_file:
         import_library_from_json(user, client_id, client_secret, json_file)

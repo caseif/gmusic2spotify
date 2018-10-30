@@ -33,7 +33,7 @@ class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
 
 def start_http_server(uri_pipe_write_fd):
     # trash stdout so we don't spam the console with HTTP logs
-    sys.stdout = open(devnull, 'w')
+    #sys.stdout = open(devnull, 'w')
 
     httpd = CustomHTTPServer(uri_pipe_write_fd, ('localhost', 8000), CustomHTTPRequestHandler)
     httpd.serve_forever()
@@ -45,7 +45,7 @@ def start_user_token_proc(uri_in, token_out, username, scope, client_id, client_
     signal.signal(signal.SIGTERM, sys.stdin.close)
 
     # trash stdout since prompt_for_user_token is pretty spammy
-    sys.stdout = open(devnull, 'w')
+    #sys.stdout = open(devnull, 'w')
 
     # call the spotipy function for obtaining the token
     # the function will read from the URI pipe we assigned to stdin, so it won't block
