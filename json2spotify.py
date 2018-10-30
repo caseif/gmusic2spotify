@@ -3,6 +3,7 @@
 from collections import OrderedDict
 import csv
 from datetime import datetime, time, timedelta
+from difflib import SequenceMatcher
 from getpass import getpass
 import json
 from math import ceil
@@ -15,6 +16,31 @@ import spotipy
 from spotipy.util import prompt_for_user_token
 
 from spotify_auth import authenticate
+
+# the minimum similarity for an artist to be considered correct with respect to the target
+ARTIST_MATCH_THRESHOLD = 0.5
+
+###
+### Regexes for transforming track/artist names to increase chance of matching
+###
+
+# apostrophes should be removed entirely (instead of replaced by spaces)
+APOS_REGEX = re.compile('\'')
+# most non-alphanumeric characters cause problems, and they don't provide any disambiguation
+NON_AN_REGEX = re.compile('[^A-Za-zÀ-ÿ0-9-_ ]')
+# a mismatch in the leading "the" in track/artist names is a common point of failure
+THE_REGEX = re.compile('^The ')
+
+# all of the following regexes are usually used to separate multiple artists
+# it's usually "good enough" to only search for the first artist -
+#     it usually only fails when a featured artist or remixer isn't properly credited as an artist
+COMMA_REGEX = re.compile(', (.*)')
+AMP_REGEX = re.compile(' & (.*)')
+X_REGEX = re.compile(' x (.*)')
+VS_REGEX = re.compile(' vs\\.? (.*)')
+
+# a mismatch in whether the featured artist is credited in the track name is a common point of failure
+FEAT_REGEX = re.compile(r' [\(\[][Ff](ea)?t\.? (.*)[\)\]]')
 
 class Song:
     def __init__(self, id, artist, title, album, in_library):
@@ -62,32 +88,49 @@ def unique(l):
             seen.add(x)
     return ul
 
-# apostrophes should be removed entirely (instead of replaced by spaces)
-APOS_REGEX = re.compile('\'')
-# most non-alphanumeric characters cause problems, and they don't provide any disambiguation
-NON_AN_REGEX = re.compile('[^A-Za-zÀ-ÿ0-9-_ ]')
-# a mismatch in the leading "the" in track/artist names is a common point of failure
-THE_REGEX = re.compile('^The ')
+
 
 def sanitize_field(v):
     return re.sub(THE_REGEX, '', re.sub(NON_AN_REGEX, ' ', re.sub(APOS_REGEX, '', v)))
 
-# all of the following regexes are usually used to separate multiple artists
-# it's usually "good enough" to only search for the first artist -
-#     it usually only fails when a featured artist or remixer isn't properly credited as an artist
-COMMA_REGEX = re.compile(', (.*)')
-AMP_REGEX = re.compile(' & (.*)')
-X_REGEX = re.compile(' x (.*)')
-VS_REGEX = re.compile(' vs\\.? (.*)')
-
 def sanitize_artist(v):
     return sanitize_field(re.sub(VS_REGEX, '', re.sub(X_REGEX, '', re.sub(AMP_REGEX, '', re.sub(COMMA_REGEX, '', v)))))
 
-# a mismatch in whether the featured artist is credited in the track name is a common point of failure
-FEAT_REGEX = re.compile(' [\(\[][Ff](ea)?t\.? (.*)[\)\]]')
-
 def sanitize_title(v):
     return sanitize_field(re.sub(FEAT_REGEX, '', v))
+
+def pick_best_result(artist, title, album, result):
+    if result['tracks']['total'] == 0:
+        return None
+
+    best_match = None
+    best_score = 0
+    for cur_track in result['tracks']['items']:
+        # if we can't find "Remix" in both, skip
+        if ('Remix' in cur_track['name']) != ('Remix' in title):
+            continue
+
+        best_artist_score = 0
+
+        for cur_artist in cur_track['artists']:
+            score = SequenceMatcher(a=artist, b=cur_artist['name']).ratio()
+            if score > best_artist_score:
+                best_artist_score = score
+
+        # probably the wrong artist
+        if best_artist_score < ARTIST_MATCH_THRESHOLD:
+            continue
+
+        # we compute the similarity of the artist, title, and album and pick the best
+        score =  (best_artist_score
+                + SequenceMatcher(a=title,  b=cur_track['name']).ratio()
+                + SequenceMatcher(a=album,  b=cur_track['album']['name']).ratio()) / 3
+
+        if score > best_score:
+            best_score = score
+            best_match = cur_track
+    
+    return best_match
 
 def import_library_from_json(username, client_id, client_secret, json_input):
     library_mod_token = authenticate(username, client_id, client_secret, 'user-library-modify playlist-modify-private')
@@ -175,13 +218,14 @@ def import_library_from_json(username, client_id, client_secret, json_input):
 
             artist = song.artist
             title = song.title
+            album = song.album
 
             # We have three different levels of heuristics which we use to match tracks:
             #   1) Pass the artist and title as-is, and hope Spotify turns something up.
             #   2) Transform the artist and title, then pass them on to spotify. This
             #      resolves issues with minor formatting differences and special characters.
             #   3) Pass only the transformed title, then manually match the artist against
-            #      the returned results. this is a last-resort, as it is only accurate in
+            #      the returned results. This is a last-resort, as it is only accurate in
             #      cases where the first two searches fail.
             # The reason for executing all heuristics is that each fails in certain cases,
             # and by executing all three, we ensure that the maximum number of tracks are
@@ -190,38 +234,28 @@ def import_library_from_json(username, client_id, client_secret, json_input):
 
             result = spotify.search('artist:%s track:%s' % (artist, title), type='track')
 
-            track = None
+            track = pick_best_result(artist, title, album, result)
 
-            if result['tracks']['total'] > 0:
-                # no additional heuristics needed
-                track = result['tracks']['items'][0]
-            else:
+            if not track:
                 # we'll try transforming the artist and title
                 artist = sanitize_artist(artist)
                 title = sanitize_title(title)
 
                 result = spotify.search('artist:%s track:%s' % (artist, title), type='track')
-                
-                if result['tracks']['total'] > 0:
-                    # no additional heuristics needed
-                    track = result['tracks']['items'][0]
-                else:
-                    # search by song title only, then match the artist after the fact
-                    result = spotify.search('track:%s' % title, type='track')
-                    if result['tracks']['total'] > 0:
-                        for item in result['tracks']['items']:
-                            for listed_artist in item['artists']:
-                                if listed_artist['name'].lower() == artist.lower():
-                                    track = item
-                                    break
-                            if track != None:
-                                break
 
-                    if track == None:
-                        # can't find it
-                        failed += 1
-                        failed_songs.append(song)
-                        continue
+                track = pick_best_result(artist, title, album, result)
+
+            if not track:
+                # search by song title only, then match the artist after the fact
+                result = spotify.search('track:%s' % title, type='track')
+                
+                track = pick_best_result(artist, title, album, result)
+
+            if not track:
+                # can't find it
+                failed += 1
+                failed_songs.append(song)
+                continue
 
             spotify_ids[local_id] = track['id']
 
@@ -257,7 +291,7 @@ def import_library_from_json(username, client_id, client_secret, json_input):
             
             print("Wrote Spotify ID mappings to %s." % MAPPINGS_FILE_NAME)
 
-    spotify_songs = unique({k:v for k, v in spotify_ids.items() if songs[UUID(k)].in_library}.values())
+    spotify_songs = unique({k:v for k, v in spotify_ids.items() if songs[k if k is UUID else UUID(k)].in_library}.values())
 
     print("Adding %d matched songs to Spotify library..." % len(spotify_songs))
 
