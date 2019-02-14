@@ -7,10 +7,12 @@ import sys
 
 from spotipy.util import prompt_for_user_token
 
+
 class CustomHTTPServer(HTTPServer):
     def __init__(self, uri_pipe_write_fd, *args, **kw):
         HTTPServer.__init__(self, *args, **kw)
         self.uri_pipe_write_fd = uri_pipe_write_fd
+
 
 class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
     def _set_headers(self):
@@ -28,15 +30,17 @@ class CustomHTTPRequestHandler(SimpleHTTPRequestHandler):
         out_file.close()
         exit(0)
 
-    def log_message(self, format, *args):
+    def log_message(self, msg_format, *args):
         return
+
 
 def start_http_server(uri_pipe_write_fd):
     # trash stdout so we don't spam the console with HTTP logs
-    #sys.stdout = open(devnull, 'w')
+    sys.stdout = open(devnull, 'w')
 
     httpd = CustomHTTPServer(uri_pipe_write_fd, ('localhost', 8000), CustomHTTPRequestHandler)
     httpd.serve_forever()
+
 
 def start_user_token_proc(uri_in, token_out, username, scope, client_id, client_secret, redirect_uri):
     # set stdin for the process to the uri pipe so we can read it directly from the HTTP thread
@@ -45,7 +49,7 @@ def start_user_token_proc(uri_in, token_out, username, scope, client_id, client_
     signal.signal(signal.SIGTERM, sys.stdin.close)
 
     # trash stdout since prompt_for_user_token is pretty spammy
-    #sys.stdout = open(devnull, 'w')
+    sys.stdout = open(devnull, 'w')
 
     # call the spotipy function for obtaining the token
     # the function will read from the URI pipe we assigned to stdin, so it won't block
@@ -65,6 +69,7 @@ def start_user_token_proc(uri_in, token_out, username, scope, client_id, client_
 
     # the process has now outlived its purpose
     exit(0)
+
 
 def authenticate(username, client_id, client_secret, scope):
     # create a new pipe for passing the URI from the HTTP thread to the authentication process
@@ -107,6 +112,7 @@ def authenticate(username, client_id, client_secret, scope):
     print("Successfully acquired Spotify token. (scope: %s)" % scope)
 
     return token
+
 
 if __name__ == "__main__":
     print("This file contains a library and cannot be run from the CLI.")

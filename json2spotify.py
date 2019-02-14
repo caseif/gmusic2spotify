@@ -17,12 +17,13 @@ from spotipy.util import prompt_for_user_token
 
 from spotify_auth import authenticate
 
+
 # the minimum similarity for an artist to be considered correct with respect to the target
 ARTIST_MATCH_THRESHOLD = 0.5
 
-###
-### Regexes for transforming track/artist names to increase chance of matching
-###
+########
+# Regexes for transforming track/artist names to increase chance of matching
+########
 
 # apostrophes should be removed entirely (instead of replaced by spaces)
 APOS_REGEX = re.compile('\'')
@@ -42,6 +43,7 @@ VS_REGEX = re.compile(' vs\\.? (.*)')
 # a mismatch in whether the featured artist is credited in the track name is a common point of failure
 FEAT_REGEX = re.compile(r' [\(\[][Ff](ea)?t\.? (.*)[\)\]]')
 
+
 class Song:
     def __init__(self, id, artist, title, album, in_library):
         self.id = id
@@ -57,14 +59,16 @@ class Song:
     def __repr__(self):
         return "<Song artist:\"%s\" title:\"%s\" album:\"%s\">" % (self.artist, self.title, self.album)
 
+
 class Playlist:
     def __init__(self, name):
         self.name = name
         self.songs = []
     
     def add_song(self, song):
-        if not song in self.songs:
+        if song not in self.songs:
             self.songs.append(song)
+
 
 def progress_bar(value, endvalue, eta=-1, bar_length=20):
     percent = float(value) / endvalue
@@ -75,9 +79,11 @@ def progress_bar(value, endvalue, eta=-1, bar_length=20):
     stdout.write("\r(%d/%d) %s %s%% (ETA: %s)" % (value, endvalue, filled + empty, int(round(percent * 100)), eta_str))
     stdout.flush()
 
+
 def shift(l, v):
     l.pop(0)
     l.append(v)
+
 
 def unique(l):
     seen = set()
@@ -89,15 +95,17 @@ def unique(l):
     return ul
 
 
-
 def sanitize_field(v):
     return re.sub(THE_REGEX, '', re.sub(NON_AN_REGEX, ' ', re.sub(APOS_REGEX, '', v)))
+
 
 def sanitize_artist(v):
     return sanitize_field(re.sub(VS_REGEX, '', re.sub(X_REGEX, '', re.sub(AMP_REGEX, '', re.sub(COMMA_REGEX, '', v)))))
 
+
 def sanitize_title(v):
     return sanitize_field(re.sub(FEAT_REGEX, '', v))
+
 
 def pick_best_result(artist, title, album, result):
     if result['tracks']['total'] == 0:
@@ -131,6 +139,7 @@ def pick_best_result(artist, title, album, result):
             best_match = cur_track
     
     return best_match
+
 
 def import_library_from_json(username, client_id, client_secret, json_input):
     library_mod_token = authenticate(username, client_id, client_secret, 'user-library-modify playlist-modify-private')
@@ -198,7 +207,7 @@ def import_library_from_json(username, client_id, client_secret, json_input):
         for local_id, song in songs.items():
             i += 1
 
-            if last_search != None:
+            if last_search is not None:
                 cur_speed = 1 / (datetime.now() - last_search).total_seconds()
 
                 if len(speeds) < MAX_SPEEDS:
@@ -208,7 +217,7 @@ def import_library_from_json(username, client_id, client_secret, json_input):
 
                 avg_speed = sum(speeds) / len(speeds)
 
-                if last_speed_update == None or (datetime.now() - last_speed_update).total_seconds() >= 1:
+                if last_speed_update is None or (datetime.now() - last_speed_update).total_seconds() >= 1:
                     eta = int(float(len(songs) - i) / avg_speed) if avg_speed > 0 else -1
                     last_speed_update = datetime.now()
                 
@@ -315,8 +324,8 @@ def import_library_from_json(username, client_id, client_secret, json_input):
         for i in range(0, ceil(len(playlist.songs) / PER_REQUEST)):
             songs_slice = [
                 spotify_ids[song.id]
-                    for song in playlist.songs[(i * PER_REQUEST):min((i + 1) * PER_REQUEST, len(playlist.songs))]
-                    if song.id in spotify_ids
+                for song in playlist.songs[(i * PER_REQUEST):min((i + 1) * PER_REQUEST, len(playlist.songs))]
+                if song.id in spotify_ids
             ]
 
             if len(songs_slice) == 0:
@@ -327,6 +336,7 @@ def import_library_from_json(username, client_id, client_secret, json_input):
     print("Finished generating playlists.")
 
     print("Done!")
+
 
 if __name__ == '__main__':
     user = input('Spotify username: ')

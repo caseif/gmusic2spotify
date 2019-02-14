@@ -7,9 +7,10 @@ from uuid import UUID, uuid4
 
 from gmusicapi.clients import Mobileclient
 
+
 class Song:
-    def __init__(self, id, artist, title, album, in_library = True):
-        self.id = id
+    def __init__(self, song_id, artist, title, album, in_library = True):
+        self.id = song_id
         self.artist = artist
         self.title = title
         self.album = album
@@ -18,14 +19,16 @@ class Song:
     def __repr__(self):
         return "<Song artist:\"%s\" title:\"%s\" album:\"%s\">" % (self.artist, self.title, self.album)
 
+
 class Playlist:
-    def __init__(self, id, name):
-        self.id = id
+    def __init__(self, song_id, name):
+        self.id = song_id
         self.name = name
         self.songs = []
     
     def add_song(self, song):
         self.songs.append(song)
+
 
 def parse_library_to_json(user, passphrase, json_output):
     client = Mobileclient()
@@ -59,6 +62,8 @@ def parse_library_to_json(user, passphrase, json_output):
 
             if 'storeId' in api_song:
                 store_to_uuid[api_song['storeId']] = id
+        except KeyboardInterrupt as e:
+            raise e
         except:
             skipped += 1
             traceback.print_exc()
@@ -94,8 +99,8 @@ def parse_library_to_json(user, passphrase, json_output):
                         # we need to map the store ID to the track's UUID
 
                         # if we aren't aware of the track already, we can create a representation from the entry data
-                        if not base_id in store_to_uuid:
-                            if not 'track' in track:
+                        if base_id not in store_to_uuid:
+                            if 'track' not in track:
                                 print("Failed to construct representation for song with store ID %s." % base_id)
                                 skipped += 1
                                 continue
@@ -106,7 +111,8 @@ def parse_library_to_json(user, passphrase, json_output):
 
                             store_to_uuid[base_id] = uuid
 
-                            song = Song(uuid, track_info['artist'], track_info['title'], track_info['album'], in_library=False)
+                            song = Song(uuid, track_info['artist'], track_info['title'], track_info['album'],
+                                        in_library=False)
 
                             local_songs[uuid] = song
 
@@ -117,7 +123,7 @@ def parse_library_to_json(user, passphrase, json_output):
                         # we can just use trackId directly
                         track_id = UUID(base_id)
 
-                    if not track_id in local_songs.keys():
+                    if track_id not in local_songs.keys():
                         print("Found non-existent song in playlist with ID %s." % track_id)
                         skipped += 1
                         continue
@@ -127,10 +133,14 @@ def parse_library_to_json(user, passphrase, json_output):
                     playlist.add_song(song)
 
                     added += 1
+                except KeyboardInterrupt as e:
+                    raise e
                 except:
                     skipped += 1
                     traceback.print_exc()
                     print("Failed to process playlist track with ID %s." % track['trackId'])
+        except KeyboardInterrupt as e:
+            raise e
         except:
             traceback.print_exc()
             print("Failed to process playlist with ID %s." % entry['id'])
@@ -140,33 +150,33 @@ def parse_library_to_json(user, passphrase, json_output):
 
     print("Serializing library data to JSON...")
 
-    songsDict = {}
+    songs_dict = {}
 
     # serialize songs to map
     for song in local_songs.values():
-        songsDict[str(song.id)] = {
+        songs_dict[str(song.id)] = {
             'artist': song.artist,
             'title': song.title,
             'album': song.album,
             'in_library': song.in_library,
         }
     
-    playlistList = []
+    playlist_list = []
 
     # serialize playlists as unlabeled list
     for playlist in local_playlists.values():
         songs = []
         for song in playlist.songs:
             songs.append(str(song.id))
-        playlistList.append({
+        playlist_list.append({
             'name': playlist.name,
             'songs': songs,
         })
     
     # create complete serial of library
     serial = {
-        'songs': songsDict,
-        'playlists': playlistList,
+        'songs': songs_dict,
+        'playlists': playlist_list,
     }
 
     print("Writing JSON to disk...")
@@ -174,6 +184,7 @@ def parse_library_to_json(user, passphrase, json_output):
     json.dump(serial, json_output, indent=2)
 
     print("Done!")
+
 
 if __name__ == "__main__":
     print("Google username: ", end='')

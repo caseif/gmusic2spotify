@@ -6,8 +6,11 @@ import spotipy
 
 from spotify_auth import authenticate
 
+
 def clear_library(username, client_id, client_secret):
-    library_mod_token = authenticate(username, client_id, client_secret, 'user-library-read user-library-modify playlist-modify-public playlist-read-private playlist-modify-private')
+    library_mod_token = authenticate(username, client_id, client_secret,
+                                     'user-library-read user-library-modify playlist-modify-public '
+                                     'playlist-read-private playlist-modify-private')
 
     print("Creating Spotify API instance...")
 
@@ -49,10 +52,11 @@ def clear_library(username, client_id, client_secret):
         if cur_count == 0:
             break
 
-        for id in [item['id'] for item in items]:
-            spotify.user_playlist_unfollow(user, id)
+        for item_id in [item['id'] for item in items]:
+            spotify.user_playlist_unfollow(user, item_id)
     
     print("Removed %d playlists." % total)
+
 
 if __name__ == "__main__":
     user = input('Spotify username: ')
